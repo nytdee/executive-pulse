@@ -30,6 +30,7 @@ from app.engine.intelligence import (
     get_blocked_friction_detailed,
     get_org_pulse_enhanced,
     persona_departments,
+    profile_relevance,
 )
 
 
@@ -299,7 +300,7 @@ def _review_button(record: Dict[str, Any], key: str, label: str = "Review") -> N
 # Compact signal row — the only default view for an item
 # ---------------------------------------------------------------------------
 
-def render_item_card(row: pd.Series, show_source: bool = True, compact: bool = False, _key_prefix: str = "gen") -> None:
+def render_item_card(row: pd.Series, show_source: bool = True, compact: bool = False, _key_prefix: str = "gen", _match_terms: list | None = None) -> None:
     """Render one compact signal row. Full detail opens in a drawer."""
     record = row.to_dict() if hasattr(row, "to_dict") else dict(row)
     task_id = str(record.get("Task_ID", "")) or str(record.get("Task", ""))[:12]
@@ -307,6 +308,7 @@ def render_item_card(row: pd.Series, show_source: bool = True, compact: bool = F
     tone = _band_tone(str(record.get("score_band", "")))
     impact = _impact_line(row)
     meta = " · ".join(p for p in [str(record.get("Department", "") or ""), str(record.get("Owner", "") or "")] if p)
+    matches = ", ".join(_match_terms[:4]) if _match_terms else ""
 
     left, right = st.columns([11, 1.6])
     with left:
@@ -318,7 +320,8 @@ def render_item_card(row: pd.Series, show_source: bool = True, compact: bool = F
             + (f"<div class='sig-meta'>{meta}</div>" if meta else "")
             + (f"<div class='sig-impact'>{impact}</div>" if impact else "")
             + f"<div class='sig-signal'><strong>{signal}</strong></div>"
-            f"</div></div>",
+            + (f"<div class='sig-meta'>Matches: {matches}</div>" if matches else "")
+            + f"</div></div>",
             unsafe_allow_html=True,
         )
     with right:
@@ -330,16 +333,39 @@ def render_item_card(row: pd.Series, show_source: bool = True, compact: bool = F
 # Overview layers and module views
 # ---------------------------------------------------------------------------
 
-def render_attention_queue(df: pd.DataFrame, title: str = "Attention Required", max_items: int = 5, persona: str | None = None) -> None:
+def render_attention_queue(df: pd.DataFrame, title: str = "Attention Required", max_items: int = 5, persona: str | None = None, profile_keywords: list | None = None) -> None:
     """Executive attention queue — Critical/High only, compact rows.
 
-    With a persona, engine-ranked items are grouped into "For you"
-    (viewer departments) and "Also on your radar" (rest of org).
-    Scores and ranking are never altered — only grouping.
+    With a custom focus profile, engine-ranked items matching the
+    profile group under "For you". Otherwise a persona groups by
+    viewer departments. Scores and ranking are never altered.
     """
     attention_df = get_executive_attention_queue(df, max_items=max_items * 2, min_band="High")
     if attention_df.empty:
         st.info("Nothing requires executive attention right now.")
+        return
+
+    if profile_keywords:
+        scored = []
+        for _, row in attention_df.iterrows():
+            relevance, matched = profile_relevance(row, profile_keywords)
+            scored.append((relevance, matched, row))
+        matched_rows = [(m, r) for rel, m, r in scored if rel > 0]
+        rest_rows = [r for rel, m, r in scored if rel == 0]
+        shown_mine = matched_rows[:3]
+        shown_rest = rest_rows[:max(0, max_items - len(shown_mine))]
+        if not shown_mine:
+            st.caption("Nothing in the queue matches your focus yet — showing top engine signals.")
+            for _, row in attention_df.head(max_items).iterrows():
+                render_item_card(row, _key_prefix="att")
+            return
+        st.markdown("<div class='grp-label'>For you</div>", unsafe_allow_html=True)
+        for matched, row in shown_mine:
+            render_item_card(row, _key_prefix="att-you", _match_terms=matched)
+        if shown_rest:
+            st.markdown("<div class='grp-label'>Also on your radar</div>", unsafe_allow_html=True)
+            for row in shown_rest:
+                render_item_card(row, _key_prefix="att-rest")
         return
 
     departments = persona_departments(persona) if persona else None

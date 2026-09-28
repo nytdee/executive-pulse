@@ -135,3 +135,7 @@ Multi-value dependencies (`EP-001;EP-011`) are understood. Scores, weights and r
 ## Viewing as (persona lens)
 
 The **Viewing as** selector (CEO, CMO, CFO, CTO / CPO, COO, Chief of Staff) groups the attention queue into **For you** (your departments, engine-ranked) and **Also on your radar** (rest of the organization). Attention scores are unchanged — only grouping adapts to the viewer.
+
+## Your focus (freeform profile)
+
+Below **Viewing as**, the **Your focus** box accepts plain language, e.g. "brand launches, partnerships, customer escalations". Type it, press Enter, and matching signals group under **For you** with the matched terms shown on each card. Matching is title-weighted keyword overlap (no LLM, no score changes); a custom focus overrides the persona lens while active. **Clear focus** returns to the persona view.

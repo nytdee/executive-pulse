@@ -43,7 +43,7 @@ from app.data.mapping import (
     process_mapped_frame,
     scope_key,
 )
-from app.engine.intelligence import get_org_pulse_enhanced, PERSONAS
+from app.engine.intelligence import get_org_pulse_enhanced, PERSONAS, extract_profile_keywords
 from app.engine.rule_engine import (
     compute_all_flags,
     rank_attention,
@@ -293,12 +293,12 @@ def render_detail_page(df: pd.DataFrame, filters: dict) -> None:
 # Pages — four-layer overview plus focused exception views
 # ---------------------------------------------------------------------------
 
-def render_overview_page(df: pd.DataFrame, changes: dict, prev_df: pd.DataFrame = None, persona: str | None = None) -> None:
+def render_overview_page(df: pd.DataFrame, changes: dict, prev_df: pd.DataFrame = None, persona: str | None = None, profile_keywords: list | None = None) -> None:
     """Overview: state, what needs me, organization, what changed."""
     render_executive_header(df, get_data_freshness(df))
 
     _section("What needs your attention", "The highest-priority exceptions surfaced by the decision engine.")
-    render_attention_queue(df, "What needs your attention", max_items=5, persona=persona)
+    render_attention_queue(df, "What needs your attention", max_items=5, persona=persona, profile_keywords=profile_keywords)
 
     _section("Organization", "Where the organization is experiencing friction.")
     render_org_signal_compact(df, max_rows=5)
@@ -307,14 +307,14 @@ def render_overview_page(df: pd.DataFrame, changes: dict, prev_df: pd.DataFrame 
     render_what_changed(changes, limit=5)
 
 
-def render_attention_page(df: pd.DataFrame, persona: str | None = None) -> None:
+def render_attention_page(df: pd.DataFrame, persona: str | None = None, profile_keywords: list | None = None) -> None:
     st.markdown('<div class="ep-eyebrow">Signal</div>', unsafe_allow_html=True)
     st.markdown('<div class="ep-title">Attention</div>', unsafe_allow_html=True)
     st.markdown(
         '<div class="ep-subtitle">Only items the decision engine considers worth executive time.</div>',
         unsafe_allow_html=True,
     )
-    render_attention_queue(df, "Attention", max_items=7, persona=persona)
+    render_attention_queue(df, "Attention", max_items=7, persona=persona, profile_keywords=profile_keywords)
 
 
 def render_decisions_page(df: pd.DataFrame) -> None:
@@ -429,6 +429,25 @@ def main():
             label_visibility="collapsed",
         )
 
+        st.markdown('<div class="ep-sidebar-label">Your focus</div>', unsafe_allow_html=True)
+        st.text_input(
+            "Your focus",
+            placeholder="e.g. brand launches, partnerships…",
+            key="ep_profile_text",
+            label_visibility="collapsed",
+        )
+        _profile_text = (st.session_state.get("ep_profile_text") or "").strip()
+        if _profile_text:
+            _keywords = extract_profile_keywords(_profile_text)
+            if _keywords:
+                shown = ", ".join(_keywords[:6]) + ("…" if len(_keywords) > 6 else "")
+                st.caption(f"Focusing on: {shown}")
+                if st.button("Clear focus", key="ep-profile-clear", type="secondary"):
+                    st.session_state.pop("ep_profile_text", None)
+                    st.rerun()
+            else:
+                st.caption("Too vague — add a few concrete terms.")
+
         st.markdown('<div class="ep-sidebar-label">Data source</div>', unsafe_allow_html=True)
         source_type = st.radio(
             "Data Source",
@@ -511,11 +530,13 @@ def main():
 
     filtered_df = apply_filters(df, filters)
     persona = st.session_state.get("ep_persona", "CEO")
+    profile_text = (st.session_state.get("ep_profile_text") or "").strip()
+    profile_keywords = extract_profile_keywords(profile_text) if profile_text else []
 
     if page == "Overview":
-        render_overview_page(filtered_df, changes, persona=persona)
+        render_overview_page(filtered_df, changes, persona=persona, profile_keywords=profile_keywords or None)
     elif page == "Attention":
-        render_attention_page(filtered_df, persona=persona)
+        render_attention_page(filtered_df, persona=persona, profile_keywords=profile_keywords or None)
     elif page == "Decisions":
         render_decisions_page(filtered_df)
     elif page == "At Risk":

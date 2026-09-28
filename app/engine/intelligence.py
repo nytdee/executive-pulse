@@ -4,6 +4,7 @@ Transforms raw flags into executive-grade attention signals.
 """
 
 from __future__ import annotations
+import re
 import pandas as pd
 from datetime import datetime, timedelta
 from typing import Dict, List, Any, Optional, Tuple
@@ -640,3 +641,82 @@ def persona_relevant(df: pd.DataFrame, persona: str | None, max_items: int = 3) 
         return df.iloc[0:0]
     subset = df[(df["Department"].isin(departments)) & (df["Status"] != "Done")]
     return rank_attention(subset).head(max_items)
+
+
+# ---------------------------------------------------------------------------
+# Custom focus profile — freeform "what I care about" matching.
+# Plain keyword overlap with title-weighted, prefix-tolerant matching.
+# No LLM, no scoring changes: relevance only groups the engine ranking.
+# ---------------------------------------------------------------------------
+
+PROFILE_STOPWORDS = frozenset("""
+    i me my we our you your he she it they them his her its their
+    am is are was were be been being have has had do does did will
+    would can could should shall may might must a an the and or but
+    of on in to for with as at by from that this these those then
+    so such no not only also very include includes including things
+    thing stuff priorities priority chief officer head like want need
+    needs look looking tell show give get please hello hey
+""".split())
+
+# field → weight for one distinct keyword hit (strongest field wins per keyword)
+PROFILE_FIELDS = (
+    ("Task", 3),
+    ("Project", 2),
+    ("Department", 2),
+    ("Decision_Requested", 2),
+    ("Blocker", 1),
+    ("Notes", 1),
+    ("Owner", 1),
+    ("Owner_Role", 1),
+)
+
+MAX_PROFILE_KEYWORDS = 12
+
+
+def _norm_tokens(text: Any) -> List[str]:
+    return [
+        cleaned for token in re.split(r"[^A-Za-z0-9]+", str(text or ""))
+        if (cleaned := re.sub(r"[^a-z0-9]", "", token.lower()))
+    ]
+
+
+def _tok_match(keyword: str, token: str) -> bool:
+    """Prefix-tolerant match ('launch' hits 'launches'); longer keywords
+    also match inside words ('brand' hits 'rebranding')."""
+    if len(keyword) < 3 or len(token) < 3:
+        return False
+    if token.startswith(keyword) or keyword.startswith(token):
+        return True
+    return len(keyword) >= 5 and keyword in token
+
+
+def extract_profile_keywords(text: str | None) -> List[str]:
+    """Meaningful keywords from freeform focus text, order-preserved."""
+    keywords: List[str] = []
+    for token in _norm_tokens(text):
+        if len(token) < 2 or token in PROFILE_STOPWORDS:
+            continue
+        if token not in keywords:
+            keywords.append(token)
+        if len(keywords) >= MAX_PROFILE_KEYWORDS:
+            break
+    return keywords
+
+
+def profile_relevance(row: pd.Series, keywords: List[str]) -> Tuple[int, List[str]]:
+    """Relevance score + matched terms for one row. Score only groups output."""
+    if not keywords:
+        return 0, []
+    field_tokens = {field: _norm_tokens(row.get(field)) for field, _ in PROFILE_FIELDS}
+    score = 0
+    matched: List[str] = []
+    for keyword in keywords:
+        best = 0
+        for field, weight in PROFILE_FIELDS:
+            if any(_tok_match(keyword, token) for token in field_tokens[field]):
+                best = max(best, weight)
+        if best:
+            score += best
+            matched.append(keyword)
+    return score, matched
