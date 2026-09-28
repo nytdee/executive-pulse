@@ -104,39 +104,54 @@ def load_google_sheet(sheet_id: str, gid: str = "0") -> pd.DataFrame:
     """
     sheet_id = _sanitize_sheet_id(sheet_id)
     gid = _sanitize_gid(gid)
-    url = f"https://docs.google.com/spreadsheets/d/{sheet_id}/export?format=csv&gid={gid}"
 
-    try:
-        df = pd.read_csv(url, dtype=str)
-        if df.empty or len(df.columns) < 2:
-            raise DataValidationError(
-                "Google Sheet returned empty or invalid data. "
-                "Ensure the sheet is 'Published to the web' (File → Share → Publish to web → Entire Document → CSV). "
-                "Also verify the Sheet ID and gid are correct."
-            )
-        return df.fillna("")
-    except pd.errors.EmptyDataError:
+    # Two Google endpoints serve sheet CSV. The export endpoint is strict
+    # (wrong tab ID or restricted file → 400); gviz is more lenient.
+    candidates = [
+        ("export", f"https://docs.google.com/spreadsheets/d/{sheet_id}/export?format=csv&gid={gid}"),
+        ("gviz", f"https://docs.google.com/spreadsheets/d/{sheet_id}/gviz/tq?tqx=out:csv&headers=1&gid={gid}"),
+    ]
+    if gid != "0":
+        # The requested tab may not exist in this sheet — retry the first tab.
+        candidates += [
+            ("export-first-tab", f"https://docs.google.com/spreadsheets/d/{sheet_id}/export?format=csv&gid=0"),
+            ("gviz-first-tab", f"https://docs.google.com/spreadsheets/d/{sheet_id}/gviz/tq?tqx=out:csv&headers=1&gid=0"),
+        ]
+
+    failures: list = []
+    for name, url in candidates:
+        try:
+            df = pd.read_csv(url, dtype=str)
+            if df.empty or len(df.columns) < 2:
+                failures.append(f"{name}: sheet returned no usable columns")
+                continue
+            return df.fillna("")
+        except pd.errors.EmptyDataError:
+            failures.append(f"{name}: sheet returned empty data")
+        except Exception as e:
+            failures.append(f"{name}: {e}")
+
+    joined = " | ".join(failures)
+    if "404" in joined:
+        raise DataValidationError(
+            "Google Sheet not found (404). Check the Sheet ID "
+            "(from https://docs.google.com/spreadsheets/d/{SHEET_ID}/edit). "
+            "Also confirm sharing: either 'Anyone with the link' or File → Share → Publish to web → CSV."
+        )
+    if "Empty" in joined or "empty data" in joined:
         raise DataValidationError(
             "Google Sheet appears empty or not published. "
-            "Go to File → Share → Publish to web → Entire Document → CSV, then click Publish. "
-            "Use the Sheet ID from the URL: https://docs.google.com/spreadsheets/d/{SHEET_ID}/edit"
+            "Go to File → Share → Publish to web → Entire Document → CSV, then click Publish."
         )
-    except Exception as e:
-        message = str(e)
-        if "400" in message:
-            raise DataValidationError(
-                "Google rejected the request (400). The Sheet ID or Tab ID is malformed. "
-                "Paste only the ID from https://docs.google.com/spreadsheets/d/{SHEET_ID}/edit "
-                "(not the full URL), and use digits only for the Tab ID (or leave it blank). "
-                "The sheet must also be Published to the web as CSV."
-            )
-        if "404" in message:
-            raise DataValidationError(
-                "Google Sheet not found (404). Check the Sheet ID. "
-                "Format: https://docs.google.com/spreadsheets/d/{SHEET_ID}/edit\n"
-                "Also ensure 'Publish to web' is enabled: File → Share → Publish to web → CSV"
-            )
-        raise DataValidationError(f"Failed to load Google Sheet: {e}")
+    # Persistent 400 across endpoints: inputs are well-formed, so the cause
+    # is on the sheet side rather than a typo.
+    raise DataValidationError(
+        "Google keeps rejecting the request (400) on every endpoint. Likely causes: "
+        "1) the Tab ID does not exist in this sheet — leave Tab ID blank to use the first tab; "
+        "2) the file is an uploaded Excel file, not a native Google Sheet (File → Save as Google Sheets); "
+        "3) a Google Workspace policy blocks public export — also try File → Share → Publish to web → CSV "
+        "in addition to link sharing."
+    )
 
 
 def load_uploaded_file(uploaded_file) -> pd.DataFrame:
