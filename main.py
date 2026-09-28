@@ -8,6 +8,7 @@ ranking and filtering live in app/data, app/engine and app/components.
 
 import json
 import os
+import time
 
 import pandas as pd
 import streamlit as st
@@ -90,9 +91,19 @@ def load_data(source_type: str, source_path: str = None, uploaded_file=None, she
     return df
 
 
+# Google Sheet data goes stale fast — refetch at most this often per session.
+RAW_TTL_SECONDS = 600
+
+
 def _get_raw_frame(source_type: str, source_key: str, uploaded_file=None, sheet_id: str = None, gid: str = "0") -> pd.DataFrame:
-    """Load an unvalidated frame, cached per attached source in session state."""
-    if st.session_state.get("ep_raw_key") == source_key and "ep_raw_frame" in st.session_state:
+    """Load an unvalidated frame, cached per attached source with a TTL."""
+    now = time.time()
+    cached_at = st.session_state.get("ep_raw_time", 0)
+    if (
+        st.session_state.get("ep_raw_key") == source_key
+        and "ep_raw_frame" in st.session_state
+        and now - cached_at < RAW_TTL_SECONDS
+    ):
         return st.session_state["ep_raw_frame"]
     if source_type == "upload":
         uploaded_file.seek(0)
@@ -101,7 +112,16 @@ def _get_raw_frame(source_type: str, source_key: str, uploaded_file=None, sheet_
         raw = load_google_sheet(sheet_id, gid)
     st.session_state["ep_raw_key"] = source_key
     st.session_state["ep_raw_frame"] = raw
+    st.session_state["ep_raw_time"] = now
     return raw
+
+
+def _refresh_data() -> None:
+    """Drop all cached data so the next run refetches from the source."""
+    st.cache_data.clear()
+    for key in ("ep_raw_key", "ep_raw_frame", "ep_raw_time"):
+        st.session_state.pop(key, None)
+    st.rerun()
 
 
 def _resolve_external_frame(source_type: str, source_key: str, uploaded_file=None, sheet_id: str = None, gid: str = "0"):
@@ -505,6 +525,9 @@ def main():
                     st.session_state.pop(f"ep-auto-{skey}", None)
                     st.session_state[f"ep-force-panel-{skey}"] = True
                     st.rerun()
+            if st.button("Refresh data", key="ep-refresh", type="secondary"):
+                _refresh_data()
+            st.caption("Sheet data auto-refreshes every 10 minutes.")
 
         st.divider()
         st.markdown('<div class="ep-sidebar-label">Navigate</div>', unsafe_allow_html=True)
