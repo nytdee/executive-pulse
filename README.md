@@ -121,6 +121,20 @@ This structure allows clean addition of the decision engine in Phase 2 without r
 - No real-time multi-source sync
 - No enterprise security features
 
+## Deploying (faster than Streamlit Cloud free tier)
+
+The repo ships a `Dockerfile`, so it runs on any container host. The container
+respects the `PORT` environment variable.
+
+- **Render** — New Web Service → connect repo → runtime Docker → deploy.
+  Free tier sleeps; Starter (~$7/mo) stays always-on and fast.
+- **Railway / Fly.io / Google Cloud Run** — connect repo or push the image;
+  all wake in seconds rather than Streamlit Cloud's ~minute cold starts.
+- **Hugging Face Spaces** — free, point-and-click, decent wake times.
+- **Any VPS** — `docker build -t pulse .` then run with `-p 8501:8501`.
+
+Streamlit Community Cloud remains the zero-config option; push to `main` and it redeploys itself.
+
 ## Attaching your own sheet
 
 Sheets with different column names or status labels work without reformatting:
