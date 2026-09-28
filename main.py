@@ -375,9 +375,9 @@ def main():
                 label_visibility="collapsed",
             )
         elif source_type == "Google Sheet":
-            st.caption("Publish the sheet to the web as CSV, then provide its Sheet ID and tab ID.")
-            sheet_id = st.text_input("Sheet ID", placeholder="Sheet ID")
-            gid = st.text_input("Tab ID", value="0", placeholder="0")
+            st.caption("Publish the sheet to the web as CSV (File → Share → Publish to web). Paste the ID only, not the full URL.")
+            sheet_id = st.text_input("Sheet ID", placeholder="1BxiMVs0XRA5nFMd...")
+            gid = st.text_input("Tab ID (digits only, blank = first tab)", value="0", placeholder="0")
             if sheet_id:
                 st.caption(f"Sheet: /{sheet_id}/export · tab {gid}")
 

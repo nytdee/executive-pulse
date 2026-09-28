@@ -63,17 +63,49 @@ def load_xlsx(file_path: str) -> pd.DataFrame:
     return df.fillna("")
 
 
+def _sanitize_sheet_id(sheet_id: str) -> str:
+    """Accept a bare ID or a full Google Sheets URL; return the bare ID."""
+    import re
+    cleaned = (sheet_id or "").strip().strip("\"'")
+    if not cleaned:
+        raise DataValidationError("Sheet ID is empty. Paste the ID from your sheet URL.")
+    # User pasted the full URL instead of the ID — extract it.
+    match = re.search(r"/spreadsheets/d/([A-Za-z0-9-_]+)", cleaned)
+    if match:
+        return match.group(1)
+    if "/" in cleaned or " " in cleaned or "?" in cleaned:
+        raise DataValidationError(
+            "Sheet ID looks invalid. Paste only the ID from the URL: "
+            "https://docs.google.com/spreadsheets/d/{SHEET_ID}/edit"
+        )
+    return cleaned
+
+
+def _sanitize_gid(gid: str) -> str:
+    """Normalize the tab ID. Blank means the first tab (0)."""
+    cleaned = (str(gid) if gid is not None else "").strip()
+    if not cleaned:
+        return "0"
+    if not cleaned.isdigit():
+        raise DataValidationError(
+            f"Tab ID '{cleaned}' is invalid. It must be digits only "
+            "(find it at the end of your sheet URL: #gid=123456, or leave blank for the first tab)."
+        )
+    return cleaned
+
+
 def load_google_sheet(sheet_id: str, gid: str = "0") -> pd.DataFrame:
     """Load data from Google Sheet via CSV export.
-    
+
     Requirements:
     - Sheet must be "Published to the web" (File → Share → Publish to web)
     - Use the full sheet ID from the URL: https://docs.google.com/spreadsheets/d/{SHEET_ID}/edit
     - gid is the sheet tab ID (default 0 = first tab). Find it in the URL: #gid=123456
     """
-    # Try the standard export URL first
+    sheet_id = _sanitize_sheet_id(sheet_id)
+    gid = _sanitize_gid(gid)
     url = f"https://docs.google.com/spreadsheets/d/{sheet_id}/export?format=csv&gid={gid}"
-    
+
     try:
         df = pd.read_csv(url, dtype=str)
         if df.empty or len(df.columns) < 2:
@@ -90,7 +122,15 @@ def load_google_sheet(sheet_id: str, gid: str = "0") -> pd.DataFrame:
             "Use the Sheet ID from the URL: https://docs.google.com/spreadsheets/d/{SHEET_ID}/edit"
         )
     except Exception as e:
-        if "404" in str(e):
+        message = str(e)
+        if "400" in message:
+            raise DataValidationError(
+                "Google rejected the request (400). The Sheet ID or Tab ID is malformed. "
+                "Paste only the ID from https://docs.google.com/spreadsheets/d/{SHEET_ID}/edit "
+                "(not the full URL), and use digits only for the Tab ID (or leave it blank). "
+                "The sheet must also be Published to the web as CSV."
+            )
+        if "404" in message:
             raise DataValidationError(
                 "Google Sheet not found (404). Check the Sheet ID. "
                 "Format: https://docs.google.com/spreadsheets/d/{SHEET_ID}/edit\n"
