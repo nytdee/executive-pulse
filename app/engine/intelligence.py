@@ -608,3 +608,35 @@ def get_org_pulse_enhanced(df: pd.DataFrame) -> pd.DataFrame:
 
 # Re-export rank_attention for convenience
 from app.engine.rule_engine import rank_attention
+
+
+# ---------------------------------------------------------------------------
+# Persona lens — viewer-aware grouping over the engine ranking.
+# Scores and order are never changed here; items are only grouped into
+# "for you" (viewer departments) and "also on your radar" (rest of org).
+# ---------------------------------------------------------------------------
+
+PERSONAS = {
+    "CEO": None,  # full-organization view
+    "Chief of Staff": None,  # full-organization view
+    "CMO": ["Marketing", "Sales"],
+    "CFO": ["Finance", "Legal"],
+    "CTO / CPO": ["Technology", "Product"],
+    "COO": ["Operations", "Technology", "People"],
+}
+
+
+def persona_departments(persona: str | None) -> list | None:
+    """Departments in a viewer's scope. None means the whole organization."""
+    if not persona:
+        return None
+    return PERSONAS.get(persona)
+
+
+def persona_relevant(df: pd.DataFrame, persona: str | None, max_items: int = 3) -> pd.DataFrame:
+    """Top engine-ranked open items inside the viewer's departments."""
+    departments = persona_departments(persona)
+    if not departments:
+        return df.iloc[0:0]
+    subset = df[(df["Department"].isin(departments)) & (df["Status"] != "Done")]
+    return rank_attention(subset).head(max_items)

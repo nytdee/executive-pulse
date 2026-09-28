@@ -12,6 +12,14 @@ import pandas as pd
 from datetime import datetime
 from typing import Optional, Dict, Any, List, Tuple
 
+from app.data.loader import REQUIRED_COLUMNS, OPTIONAL_COLUMNS
+from app.data.mapping import (
+    VALUE_COLUMNS,
+    apply_mapping,
+    mapping_status,
+    process_mapped_frame,
+    scope_key,
+)
 from app.engine.intelligence import (
     detect_cross_team_friction,
     analyze_owner_load,
@@ -21,6 +29,7 @@ from app.engine.intelligence import (
     get_decision_queue_detailed,
     get_blocked_friction_detailed,
     get_org_pulse_enhanced,
+    persona_departments,
 )
 
 
@@ -321,13 +330,35 @@ def render_item_card(row: pd.Series, show_source: bool = True, compact: bool = F
 # Overview layers and module views
 # ---------------------------------------------------------------------------
 
-def render_attention_queue(df: pd.DataFrame, title: str = "Attention Required", max_items: int = 5) -> None:
-    """Executive attention queue — Critical/High only, compact rows."""
-    attention_df = get_executive_attention_queue(df, max_items=max_items, min_band="High")
+def render_attention_queue(df: pd.DataFrame, title: str = "Attention Required", max_items: int = 5, persona: str | None = None) -> None:
+    """Executive attention queue — Critical/High only, compact rows.
+
+    With a persona, engine-ranked items are grouped into "For you"
+    (viewer departments) and "Also on your radar" (rest of org).
+    Scores and ranking are never altered — only grouping.
+    """
+    attention_df = get_executive_attention_queue(df, max_items=max_items * 2, min_band="High")
     if attention_df.empty:
         st.info("Nothing requires executive attention right now.")
         return
-    for _, row in attention_df.iterrows():
+
+    departments = persona_departments(persona) if persona else None
+    if departments:
+        mine = attention_df[attention_df["Department"].isin(departments)]
+        rest = attention_df[~attention_df["Task_ID"].isin(mine["Task_ID"])]
+        shown_mine = mine.head(3)
+        shown_rest = rest.head(max(0, max_items - len(shown_mine)))
+        if not shown_mine.empty:
+            st.markdown("<div class='grp-label'>For you</div>", unsafe_allow_html=True)
+            for _, row in shown_mine.iterrows():
+                render_item_card(row, _key_prefix="att-you")
+        if not shown_rest.empty:
+            st.markdown("<div class='grp-label'>Also on your radar</div>", unsafe_allow_html=True)
+            for _, row in shown_rest.iterrows():
+                render_item_card(row, _key_prefix="att-rest")
+        return
+
+    for _, row in attention_df.head(max_items).iterrows():
         render_item_card(row, _key_prefix="att")
 
 
@@ -654,8 +685,79 @@ def render_meeting_brief(df: pd.DataFrame, meeting_name: str = "") -> None:
 
 
 # ---------------------------------------------------------------------------
+# Field mapping — translate foreign sheets onto the canonical schema
+# ---------------------------------------------------------------------------
+
+def render_mapping_panel(raw_df: pd.DataFrame, source_key: str) -> None:
+    """Guided column + value mapping. Dashboard renders after Apply."""
+    skey = scope_key(source_key)
+    col_map, unmapped, unknowns, suggestions = mapping_status(raw_df)
+
+    st.markdown('<div class="ep-eyebrow">Setup</div>', unsafe_allow_html=True)
+    st.markdown('<div class="ep-title">Map your data</div>', unsafe_allow_html=True)
+    st.markdown(
+        f"<div class='ep-subtitle'>Your sheet uses different labels. "
+        f"Match each field once — {len(raw_df)} rows detected.</div>",
+        unsafe_allow_html=True,
+    )
+
+    st.markdown("<div class='grp-label'>Columns</div>", unsafe_allow_html=True)
+    options = ["— select —"] + list(raw_df.columns)
+    selections: Dict[str, str] = {}
+    for col in REQUIRED_COLUMNS:
+        suggested = col_map.get(col)
+        index = options.index(suggested) if suggested in options else 0
+        selections[col] = st.selectbox(
+            f"{col}", options, index=index, key=f"ep-cmap-{skey}-{col}",
+        )
+
+    auto_optional = {k: v for k, v in col_map.items() if k in OPTIONAL_COLUMNS and v}
+    if auto_optional:
+        st.caption("Also mapped: " + ", ".join(f"{v} → {k}" for k, v in auto_optional.items()))
+    if unmapped:
+        st.caption("Ignored columns: " + ", ".join(unmapped))
+
+    value_selections: Dict[tuple, str] = {}
+    if unknowns:
+        st.markdown("<div class='grp-label'>Values</div>", unsafe_allow_html=True)
+        st.caption("Your sheet uses these labels. Choose what each one means.")
+        for col, values in unknowns.items():
+            for i, value in enumerate(values):
+                suggested = suggestions[col][value]
+                valid = VALUE_COLUMNS[col]
+                index = valid.index(suggested) if suggested in valid else 0
+                value_selections[(col, value)] = st.selectbox(
+                    f"{col}: “{value}” means",
+                    valid, index=index, key=f"ep-vmap-{skey}-{col}-{i}",
+                )
+
+    if st.button("Apply mapping", type="primary", key=f"ep-apply-{skey}"):
+        missing = [c for c, s in selections.items() if not s or s.startswith("—")]
+        if missing:
+            st.error(f"Map every required field. Still unmapped: {', '.join(missing)}")
+            return
+        values: Dict[str, Dict[str, str]] = {}
+        for (col, old), new in value_selections.items():
+            values.setdefault(col, {})[old] = new
+        try:
+            mapped = apply_mapping(raw_df, selections, values)
+            process_mapped_frame(mapped)  # validate now, surface problems here
+        except Exception as e:
+            st.error(f"Mapping does not validate yet: {e}")
+            return
+        st.session_state[f"ep-confirmed-{skey}"] = {"columns": selections, "values": values}
+        st.session_state[f"ep-auto-{skey}"] = False
+        st.rerun()
+
+
+# ---------------------------------------------------------------------------
 # Filters — same behavior, compact presentation
 # ---------------------------------------------------------------------------
+
+FILTER_WIDGET_KEYS = [
+    "flt-dept", "flt-owner", "flt-status", "flt-priority",
+    "flt-datecol", "flt-daterange", "flt-search", "flt-score",
+]
 
 def render_sidebar_filters(df: pd.DataFrame) -> dict:
     """Render sidebar filters and return filter values.
@@ -716,7 +818,7 @@ def render_sidebar_filters(df: pd.DataFrame) -> dict:
     if active > 0:
         st.sidebar.caption(f"Filters · {active} active")
         if st.sidebar.button("Reset filters", key="flt-reset", type="secondary"):
-            for widget_key in ["flt-dept", "flt-owner", "flt-status", "flt-priority", "flt-datecol", "flt-daterange", "flt-search", "flt-score"]:
+            for widget_key in FILTER_WIDGET_KEYS:
                 st.session_state.pop(widget_key, None)
             st.rerun()
 

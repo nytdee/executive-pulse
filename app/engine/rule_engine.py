@@ -4,6 +4,7 @@ Computes flags, attention scores, and reason codes for each task.
 """
 
 from __future__ import annotations
+import re
 import pandas as pd
 from datetime import datetime, timedelta
 from typing import List, Dict, Any
@@ -89,18 +90,25 @@ def compute_flags(row: pd.Series, all_tasks: pd.DataFrame, reference_date: datet
         reason_codes.append("High impact")
         score += 3
 
-    # DEPENDENCY_RISK: dependency exists and linked dependency is overdue/blocked
+    # DEPENDENCY_RISK: dependency exists and linked dependency is overdue/blocked.
+    # Dependencies may list several Task_IDs separated by ; , or |.
     dependency_risk = False
     if isinstance(dependency, str) and dependency.strip():
-        dep_task = all_tasks[all_tasks["Task_ID"] == dependency.strip()]
-        if not dep_task.empty:
+        dep_ids = [d.strip() for d in re.split(r"[;,|]", dependency) if d.strip()]
+        risky = []
+        for dep_id in dep_ids:
+            dep_task = all_tasks[all_tasks["Task_ID"] == dep_id]
+            if dep_task.empty:
+                continue
             dep_row = dep_task.iloc[0]
             dep_status = dep_row.get("Status", "")
             dep_due = dep_row.get("Due_Date")
             if dep_status == "Blocked" or (pd.notna(dep_due) and dep_due < reference_date and dep_status != "Done"):
-                dependency_risk = True
-                reason_codes.append(f"Dependency risk ({dependency})")
-                score += 2
+                risky.append(dep_id)
+        if risky:
+            dependency_risk = True
+            reason_codes.append(f"Dependency risk ({', '.join(risky)})")
+            score += 2
 
     # Determine score band
     if score >= 10:

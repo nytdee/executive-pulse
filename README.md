@@ -120,3 +120,18 @@ This structure allows clean addition of the decision engine in Phase 2 without r
 - No AI recommendations
 - No real-time multi-source sync
 - No enterprise security features
+
+## Attaching your own sheet
+
+Sheets with different column names or status labels work without reformatting:
+
+1. Select **Upload CSV/XLSX** or **Google Sheet** in the sidebar.
+2. If everything resolves cleanly, the mapping happens **automatically in the backend** — the sidebar shows "Mapping: automatic".
+3. If a header or value is ambiguous (e.g. `Waiting for Decision`, `At Risk`, `Stale`), a **Map your data** panel appears: match each field once and apply.
+4. If the automatic guess is ever wrong, use **Adjust mapping** in the sidebar to correct it.
+
+Multi-value dependencies (`EP-001;EP-011`) are understood. Scores, weights and ranking are never altered by mapping — it only translates labels.
+
+## Viewing as (persona lens)
+
+The **Viewing as** selector (CEO, CMO, CFO, CTO / CPO, COO, Chief of Staff) groups the attention queue into **For you** (your departments, engine-ranked) and **Also on your radar** (rest of the organization). Attention scores are unchanged — only grouping adapts to the viewer.

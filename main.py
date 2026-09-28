@@ -24,11 +24,26 @@ from app.components.ui import (
     render_org_signal_compact,
     render_stale_work,
     render_meeting_brief,
+    render_mapping_panel,
     render_sidebar_filters,
     apply_filters,
+    FILTER_WIDGET_KEYS,
 )
-from app.data.loader import load_and_validate, get_data_freshness
-from app.engine.intelligence import get_org_pulse_enhanced
+from app.data.loader import (
+    REQUIRED_COLUMNS,
+    DataValidationError,
+    load_and_validate,
+    load_google_sheet,
+    load_uploaded_file,
+    get_data_freshness,
+)
+from app.data.mapping import (
+    apply_mapping,
+    mapping_status,
+    process_mapped_frame,
+    scope_key,
+)
+from app.engine.intelligence import get_org_pulse_enhanced, PERSONAS
 from app.engine.rule_engine import (
     compute_all_flags,
     rank_attention,
@@ -73,6 +88,55 @@ def load_data(source_type: str, source_path: str = None, uploaded_file=None, she
     df = compute_all_flags(df)
     df = rank_attention(df)
     return df
+
+
+def _get_raw_frame(source_type: str, source_key: str, uploaded_file=None, sheet_id: str = None, gid: str = "0") -> pd.DataFrame:
+    """Load an unvalidated frame, cached per attached source in session state."""
+    if st.session_state.get("ep_raw_key") == source_key and "ep_raw_frame" in st.session_state:
+        return st.session_state["ep_raw_frame"]
+    if source_type == "upload":
+        uploaded_file.seek(0)
+        raw = load_uploaded_file(uploaded_file)
+    else:
+        raw = load_google_sheet(sheet_id, gid)
+    st.session_state["ep_raw_key"] = source_key
+    st.session_state["ep_raw_frame"] = raw
+    return raw
+
+
+def _resolve_external_frame(source_type: str, source_key: str, uploaded_file=None, sheet_id: str = None, gid: str = "0"):
+    """Map a foreign sheet onto the schema. Returns (df or None, pending or None)."""
+    # Fresh source → drop stale filter selections referencing the old dataset.
+    if st.session_state.get("ep_filter_key") != source_key:
+        for widget_key in FILTER_WIDGET_KEYS:
+            st.session_state.pop(widget_key, None)
+        st.session_state["ep_filter_key"] = source_key
+
+    raw = _get_raw_frame(source_type, source_key, uploaded_file, sheet_id, gid)
+    skey = scope_key(source_key)
+    if st.session_state.pop(f"ep-force-panel-{skey}", None):
+        return None, (raw, source_key)
+    confirmed = st.session_state.get(f"ep-confirmed-{skey}")
+
+    if confirmed is not None:
+        try:
+            mapped = apply_mapping(raw, confirmed["columns"], confirmed.get("values", {}))
+            return process_mapped_frame(mapped), None
+        except DataValidationError:
+            pass  # fall through to the panel so the user can fix it
+
+    col_map, _unmapped, unknowns, suggestions = mapping_status(raw)
+    needs_ui = any(col_map.get(c) is None for c in REQUIRED_COLUMNS) or bool(unknowns)
+    if not needs_ui:
+        auto = {
+            "columns": {k: v for k, v in col_map.items() if v},
+            "values": {c: dict(s) for c, s in suggestions.items()},
+        }
+        st.session_state[f"ep-confirmed-{skey}"] = auto
+        st.session_state[f"ep-auto-{skey}"] = True
+        mapped = apply_mapping(raw, auto["columns"], auto["values"])
+        return process_mapped_frame(mapped), None
+    return None, (raw, source_key)
 
 
 SNAPSHOT_PATH = os.path.join(os.path.dirname(__file__), "app", "data", ".snapshot.json")
@@ -229,12 +293,12 @@ def render_detail_page(df: pd.DataFrame, filters: dict) -> None:
 # Pages — four-layer overview plus focused exception views
 # ---------------------------------------------------------------------------
 
-def render_overview_page(df: pd.DataFrame, changes: dict, prev_df: pd.DataFrame = None) -> None:
+def render_overview_page(df: pd.DataFrame, changes: dict, prev_df: pd.DataFrame = None, persona: str | None = None) -> None:
     """Overview: state, what needs me, organization, what changed."""
     render_executive_header(df, get_data_freshness(df))
 
     _section("What needs your attention", "The highest-priority exceptions surfaced by the decision engine.")
-    render_attention_queue(df, "What needs your attention", max_items=5)
+    render_attention_queue(df, "What needs your attention", max_items=5, persona=persona)
 
     _section("Organization", "Where the organization is experiencing friction.")
     render_org_signal_compact(df, max_rows=5)
@@ -243,14 +307,14 @@ def render_overview_page(df: pd.DataFrame, changes: dict, prev_df: pd.DataFrame 
     render_what_changed(changes, limit=5)
 
 
-def render_attention_page(df: pd.DataFrame) -> None:
+def render_attention_page(df: pd.DataFrame, persona: str | None = None) -> None:
     st.markdown('<div class="ep-eyebrow">Signal</div>', unsafe_allow_html=True)
     st.markdown('<div class="ep-title">Attention</div>', unsafe_allow_html=True)
     st.markdown(
         '<div class="ep-subtitle">Only items the decision engine considers worth executive time.</div>',
         unsafe_allow_html=True,
     )
-    render_attention_queue(df, "Attention", max_items=7)
+    render_attention_queue(df, "Attention", max_items=7, persona=persona)
 
 
 def render_decisions_page(df: pd.DataFrame) -> None:
@@ -356,6 +420,15 @@ def main():
             label_visibility="collapsed",
         )
 
+        st.markdown('<div class="ep-sidebar-label">Viewing as</div>', unsafe_allow_html=True)
+        st.radio(
+            "Viewing as",
+            list(PERSONAS.keys()),
+            index=0,
+            key="ep_persona",
+            label_visibility="collapsed",
+        )
+
         st.markdown('<div class="ep-sidebar-label">Data source</div>', unsafe_allow_html=True)
         source_type = st.radio(
             "Data Source",
@@ -381,30 +454,55 @@ def main():
             if sheet_id:
                 st.caption(f"Sheet: /{sheet_id}/export · tab {gid}")
 
+        df = None
+        pending_mapping = None
+        source_key = "sample"
         try:
             if source_type == "Sample Data":
                 df = load_data("csv")
             elif source_type == "Upload CSV/XLSX" and uploaded_file:
-                df = load_data("upload", uploaded_file=uploaded_file)
+                source_key = f"upload:{uploaded_file.name}:{uploaded_file.size}"
+                df, pending_mapping = _resolve_external_frame(
+                    "upload", source_key, uploaded_file=uploaded_file,
+                )
             elif source_type == "Google Sheet" and sheet_id:
-                df = load_data("gsheet", sheet_id=sheet_id, gid=gid)
+                source_key = f"gsheet:{sheet_id.strip()}:{gid}"
+                df, pending_mapping = _resolve_external_frame(
+                    "gsheet", source_key, sheet_id=sheet_id, gid=gid,
+                )
             else:
                 df = load_data("csv")
         except Exception as e:
             st.error(f"Failed to load data: {e}")
             st.stop()
 
+        if source_key != "sample" and df is not None:
+            skey = scope_key(source_key)
+            if st.session_state.get(f"ep-confirmed-{skey}") is not None:
+                is_auto = bool(st.session_state.get(f"ep-auto-{skey}"))
+                st.caption(f"Mapping: {'automatic' if is_auto else 'custom'}")
+                if st.button("Adjust mapping", key=f"ep-adjust-{skey}", type="secondary"):
+                    st.session_state.pop(f"ep-confirmed-{skey}", None)
+                    st.session_state.pop(f"ep-auto-{skey}", None)
+                    st.session_state[f"ep-force-panel-{skey}"] = True
+                    st.rerun()
+
         st.divider()
         st.markdown('<div class="ep-sidebar-label">Navigate</div>', unsafe_allow_html=True)
         page = st.radio("Navigate", PAGES, index=0, label_visibility="collapsed")
 
         st.divider()
-        filters = render_sidebar_filters(df)
+        filters = render_sidebar_filters(df) if df is not None else None
 
         st.markdown(
             '<div class="ep-freshness" style="margin-top:1.5rem;">Executive Pulse</div>',
             unsafe_allow_html=True,
         )
+
+    if df is None and pending_mapping is not None:
+        raw_pending, key_pending = pending_mapping
+        render_mapping_panel(raw_pending, key_pending)
+        st.stop()
 
     # Change detection against the previous snapshot (engine unchanged).
     previous_snapshot = _load_snapshot()
@@ -412,11 +510,12 @@ def main():
     _save_snapshot(df)
 
     filtered_df = apply_filters(df, filters)
+    persona = st.session_state.get("ep_persona", "CEO")
 
     if page == "Overview":
-        render_overview_page(filtered_df, changes)
+        render_overview_page(filtered_df, changes, persona=persona)
     elif page == "Attention":
-        render_attention_page(filtered_df)
+        render_attention_page(filtered_df, persona=persona)
     elif page == "Decisions":
         render_decisions_page(filtered_df)
     elif page == "At Risk":
