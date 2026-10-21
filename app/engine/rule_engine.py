@@ -6,9 +6,20 @@ Computes flags, attention scores, and reason codes for each task.
 from __future__ import annotations
 import re
 import pandas as pd
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import List, Dict, Any
 from dataclasses import dataclass
+
+
+def utc_now() -> datetime:
+    """The current time as a naive UTC datetime.
+
+    Every timestamp in a reporting sheet is naive, so the reference clock
+    has to be naive too — and it is anchored to UTC so the result does
+    not depend on the machine's timezone. The TypeScript engine uses the
+    same frame, which is what the parity suite checks.
+    """
+    return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
 @dataclass
@@ -29,7 +40,7 @@ class FlagResult:
 def compute_flags(row: pd.Series, all_tasks: pd.DataFrame, reference_date: datetime = None) -> FlagResult:
     """Compute all flags for a single task row."""
     if reference_date is None:
-        reference_date = datetime.now()
+        reference_date = utc_now()
 
     reason_codes = []
     score = 0
@@ -43,17 +54,24 @@ def compute_flags(row: pd.Series, all_tasks: pd.DataFrame, reference_date: datet
     dependency = row.get("Dependency", "")
     exec_decision = row.get("Executive_Decision_Required", False)
 
+    # Day-granularity reference. Due dates are calendar dates: a task due
+    # today is "due today", never overdue, even at 23:59.
+    today = pd.Timestamp(reference_date).normalize()
+
     # OVERDUE: due date < today AND status != Done
     overdue = False
-    if pd.notna(due_date) and due_date < reference_date and status != "Done":
-        overdue = True
-        reason_codes.append("Overdue")
-        score += 4
+    if pd.notna(due_date):
+        due_day = pd.Timestamp(due_date).normalize()
+        if due_day < today and status != "Done":
+            overdue = True
+            reason_codes.append("Overdue")
+            score += 4
 
-    # AT_RISK: due date <= today + 2 days AND status != Done
+    # AT_RISK: due date between today and today + 2 days AND status != Done
     at_risk = False
-    if pd.notna(due_date) and due_date <= reference_date + timedelta(days=2) and status != "Done":
-        if not overdue:  # Don't double-count if already overdue
+    if pd.notna(due_date):
+        due_day = pd.Timestamp(due_date).normalize()
+        if today <= due_day <= today + timedelta(days=2) and status != "Done":
             at_risk = True
             reason_codes.append("At risk (due within 48h)")
             score += 2
@@ -103,7 +121,12 @@ def compute_flags(row: pd.Series, all_tasks: pd.DataFrame, reference_date: datet
             dep_row = dep_task.iloc[0]
             dep_status = dep_row.get("Status", "")
             dep_due = dep_row.get("Due_Date")
-            if dep_status == "Blocked" or (pd.notna(dep_due) and dep_due < reference_date and dep_status != "Done"):
+            dep_overdue = (
+                pd.notna(dep_due)
+                and pd.Timestamp(dep_due).normalize() < today
+                and dep_status != "Done"
+            )
+            if dep_status == "Blocked" or dep_overdue:
                 risky.append(dep_id)
         if risky:
             dependency_risk = True
@@ -137,7 +160,7 @@ def compute_flags(row: pd.Series, all_tasks: pd.DataFrame, reference_date: datet
 def compute_all_flags(df: pd.DataFrame, reference_date: datetime = None) -> pd.DataFrame:
     """Compute flags for all tasks and return enriched dataframe."""
     if reference_date is None:
-        reference_date = datetime.now()
+        reference_date = utc_now()
 
     results = []
     for _, row in df.iterrows():
@@ -174,6 +197,17 @@ def get_attention_queue(df: pd.DataFrame, top_n: int = 7, min_score: int = 4) ->
     return rank_attention(filtered).head(top_n)
 
 
+def count_attention(df: pd.DataFrame, min_score: int = 4) -> int:
+    """Count all items above the attention threshold (not capped).
+
+    Used for headline counts, where a truncated number would misreport
+    the state of the organization.
+    """
+    if "attention_score" not in df.columns:
+        return 0
+    return int((df["attention_score"] >= min_score).sum())
+
+
 def get_decision_queue(df: pd.DataFrame) -> pd.DataFrame:
     """Get items requiring executive decision."""
     return df[df["decision_required"] == True].sort_values(
@@ -183,10 +217,14 @@ def get_decision_queue(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def get_at_risk(df: pd.DataFrame) -> pd.DataFrame:
-    """Get at-risk items (high impact + due soon or blocked)."""
+    """Get at-risk items: approaching deadline, or high-impact open work.
+
+    Single source of truth for the At Risk view — the UI layer calls this
+    instead of re-deriving its own (previously divergent) filter.
+    """
     mask = (
         (df["at_risk"] == True) |
-        ((df["high_impact"] == True) & (df["Status"] != "Done") & (df["attention_score"] >= 4))
+        ((df["high_impact"] == True) & (df["Status"] != "Done"))
     )
     return df[mask].sort_values(
         by=["attention_score", "Due_Date"],

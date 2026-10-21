@@ -1,0 +1,749 @@
+/*
+ * Executive Pulse - design system.
+ *
+ * A restrained, earthy, executive-grade interface.
+ *
+ * Rules encoded here:
+ *  - No emojis, anywhere.
+ *  - Colour carries meaning, never decoration. Most of the surface is
+ *    beige / cream / charcoal.
+ *  - Progressive disclosure: the default view shows only what an
+ *    executive needs; everything else opens on demand.
+ *  - Typography and whitespace over boxes and borders.
+ *
+ * Plain CSS custom properties, no utility framework: the design system
+ * is small, explicit and a single source of truth.
+ */
+
+:root {
+  --color-canvas: #f5f1e8;
+  --color-surface: #fbf9f4;
+  --color-surface-2: #f0ece4;
+  --color-elevated: #ffffff;
+
+  --color-ink: #17191c;
+  --color-ink-2: #62645f;
+  --color-ink-3: #8a8982;
+
+  --color-line: #ddd7cc;
+  --color-line-soft: #e8e3d8;
+
+  --color-navy: #243b53;
+  --color-navy-hover: #1d3044;
+  --color-slate: #526a82;
+  --color-brass: #a88a5a;
+
+  --color-critical: #8b3f3b;
+  --color-critical-bg: #f5e9e6;
+  --color-warning: #9a7735;
+  --color-warning-bg: #f4eddc;
+  --color-ok: #46624d;
+  --color-ok-bg: #e9efe7;
+
+  --font-sans: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+
+  color-scheme: light;
+}
+
+/* ------------------------------------------------------------------ */
+/* Base                                                               */
+/* ------------------------------------------------------------------ */
+
+* {
+  border-color: var(--color-line);
+  box-sizing: border-box;
+}
+
+html,
+body {
+  background: var(--color-canvas);
+  color: var(--color-ink);
+  font-family: var(--font-sans);
+  letter-spacing: -0.005em;
+  -webkit-font-smoothing: antialiased;
+}
+
+::selection {
+  background: var(--color-line);
+  color: var(--color-ink);
+}
+
+h1,
+h2,
+h3,
+h4 {
+  color: var(--color-ink);
+  letter-spacing: -0.025em;
+  font-weight: 600;
+}
+
+a {
+  color: var(--color-navy);
+  text-decoration: none;
+}
+
+a:hover {
+  text-decoration: underline;
+}
+
+/* ------------------------------------------------------------------ */
+/* Typographic primitives                                             */
+/* ------------------------------------------------------------------ */
+
+.ep-eyebrow {
+  color: var(--color-ink-3);
+  font-size: 0.6875rem;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+.ep-title {
+  color: var(--color-ink);
+  font-size: 1.9rem;
+  line-height: 1.15;
+  font-weight: 600;
+  letter-spacing: -0.03em;
+}
+
+.ep-subtitle {
+  color: var(--color-ink-3);
+  font-size: 0.875rem;
+  line-height: 1.5;
+  max-width: 62ch;
+}
+
+.ep-state-line {
+  color: var(--color-ink);
+  font-size: 1rem;
+  margin-top: 1.1rem;
+}
+
+.ep-freshness {
+  color: var(--color-ink-3);
+  font-size: 0.75rem;
+  line-height: 1.6;
+  font-variant-numeric: tabular-nums;
+}
+
+.ep-section {
+  margin-top: 2.75rem;
+}
+
+.ep-section-title {
+  color: var(--color-ink);
+  font-size: 1.0625rem;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+}
+
+.ep-section-caption {
+  color: var(--color-ink-3);
+  font-size: 0.8125rem;
+  margin-top: 0.2rem;
+  max-width: 62ch;
+}
+
+.ep-group-label {
+  color: var(--color-ink-3);
+  font-size: 0.6875rem;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  margin: 1.5rem 0 0.35rem;
+}
+
+.ep-group-summary {
+  color: var(--color-ink-2);
+  font-size: 0.8125rem;
+  margin-bottom: 0.35rem;
+}
+
+/* ------------------------------------------------------------------ */
+/* Executive summary strip                                             */
+/* ------------------------------------------------------------------ */
+
+.ep-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 2.4rem;
+  margin: 1.75rem 0 0;
+  padding: 1.05rem 0;
+  border-top: 1px solid var(--color-line);
+  border-bottom: 1px solid var(--color-line);
+}
+
+.ep-summary-item {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.ep-summary-label {
+  color: var(--color-ink-3);
+  font-size: 0.6563rem;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.ep-summary-value {
+  color: var(--color-ink);
+  font-size: 1.5rem;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
+}
+
+.ep-summary-item[data-tone="critical"] .ep-summary-value {
+  color: var(--color-critical);
+}
+
+.ep-summary-item[data-tone="warning"] .ep-summary-value {
+  color: var(--color-warning);
+}
+
+/* ------------------------------------------------------------------ */
+/* Signal rows — the default view of an item                          */
+/* ------------------------------------------------------------------ */
+
+.sig {
+  display: flex;
+  gap: 0.9rem;
+  padding: 0.9rem 0.15rem;
+  border-bottom: 1px solid var(--color-line-soft);
+  align-items: flex-start;
+  transition: background-color 160ms ease;
+}
+
+.sig:hover {
+  background: color-mix(in srgb, var(--color-surface) 60%, transparent);
+}
+
+.sig-bar {
+  flex: 0 0 auto;
+  width: 2px;
+  align-self: stretch;
+  border-radius: 2px;
+  background: var(--color-navy);
+  min-height: 2.25rem;
+}
+
+.sig-bar[data-tone="critical"] {
+  background: var(--color-critical);
+}
+
+.sig-bar[data-tone="warning"] {
+  background: var(--color-warning);
+}
+
+.sig-bar[data-tone="muted"] {
+  background: var(--color-ink-3);
+}
+
+.sig-main {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.sig-title {
+  color: var(--color-ink);
+  font-size: 0.9375rem;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.sig-meta {
+  color: var(--color-ink-3);
+  font-size: 0.75rem;
+  margin-top: 0.15rem;
+}
+
+.sig-impact {
+  color: var(--color-ink-2);
+  font-size: 0.8125rem;
+  font-weight: 500;
+  margin-top: 0.3rem;
+}
+
+.sig-signal {
+  color: var(--color-ink-3);
+  font-size: 0.75rem;
+  margin-top: 0.15rem;
+}
+
+.sig-signal strong {
+  color: var(--color-ink-2);
+  font-weight: 600;
+}
+
+.sig-matches {
+  color: var(--color-ink-3);
+  font-size: 0.6875rem;
+  margin-top: 0.2rem;
+  font-style: italic;
+}
+
+.sig-side {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+/* ------------------------------------------------------------------ */
+/* Decision cards                                                      */
+/* ------------------------------------------------------------------ */
+
+.dec {
+  padding: 1.05rem 0.15rem;
+  border-bottom: 1px solid var(--color-line-soft);
+}
+
+.dec-kicker {
+  color: var(--color-ink-3);
+  font-size: 0.6563rem;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.dec-title {
+  color: var(--color-ink);
+  font-size: 0.9375rem;
+  font-weight: 600;
+  margin-top: 0.3rem;
+}
+
+.dec-meta {
+  color: var(--color-ink-3);
+  font-size: 0.7813rem;
+  margin-top: 0.25rem;
+}
+
+/* ------------------------------------------------------------------ */
+/* Detail drawer                                                       */
+/* ------------------------------------------------------------------ */
+
+.dw-kicker {
+  color: var(--color-ink-3);
+  font-size: 0.6563rem;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  margin: 1.15rem 0 0.35rem;
+}
+
+.dw-kicker:first-child {
+  margin-top: 0;
+}
+
+.dw-body {
+  color: var(--color-ink);
+  font-size: 0.875rem;
+  line-height: 1.55;
+}
+
+.dw-muted {
+  color: var(--color-ink-3);
+  font-size: 0.8125rem;
+  line-height: 1.5;
+}
+
+.dw-score-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  color: var(--color-ink-2);
+  font-size: 0.8125rem;
+  padding: 0.3rem 0;
+  border-bottom: 1px solid var(--color-line-soft);
+}
+
+.dw-total {
+  display: flex;
+  justify-content: space-between;
+  color: var(--color-ink);
+  font-size: 0.875rem;
+  font-weight: 600;
+  padding-top: 0.45rem;
+}
+
+/* ------------------------------------------------------------------ */
+/* Briefing document                                                   */
+/* ------------------------------------------------------------------ */
+
+.brief-doc {
+  max-width: 44rem;
+}
+
+.brief-item {
+  padding: 0.6rem 0;
+  border-bottom: 1px solid var(--color-line-soft);
+  color: var(--color-ink);
+  font-size: 0.875rem;
+  line-height: 1.5;
+}
+
+.brief-num {
+  color: var(--color-ink-3);
+  font-size: 0.75rem;
+  font-weight: 600;
+  margin-right: 0.55rem;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ------------------------------------------------------------------ */
+/* Status chips                                                        */
+/* ------------------------------------------------------------------ */
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.15rem 0.5rem;
+  border-radius: 3px;
+  border: 1px solid var(--color-line);
+  background: var(--color-surface-2);
+  color: var(--color-ink-2);
+  font-size: 0.6563rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.chip[data-tone="critical"] {
+  color: var(--color-critical);
+  background: var(--color-critical-bg);
+  border-color: color-mix(in srgb, var(--color-critical) 22%, transparent);
+}
+
+.chip[data-tone="warning"] {
+  color: var(--color-warning);
+  background: var(--color-warning-bg);
+  border-color: color-mix(in srgb, var(--color-warning) 22%, transparent);
+}
+
+.chip[data-tone="ok"] {
+  color: var(--color-ok);
+  background: var(--color-ok-bg);
+  border-color: color-mix(in srgb, var(--color-ok) 22%, transparent);
+}
+
+.chip[data-tone="navy"] {
+  color: var(--color-navy);
+  background: color-mix(in srgb, var(--color-navy) 8%, transparent);
+  border-color: color-mix(in srgb, var(--color-navy) 24%, transparent);
+}
+
+/* ------------------------------------------------------------------ */
+/* Navigation                                                          */
+/* ------------------------------------------------------------------ */
+
+.ep-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.ep-nav-link {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.45rem 0.6rem;
+  border-radius: 4px;
+  color: var(--color-ink-2);
+  font-size: 0.8125rem;
+  font-weight: 500;
+  transition: background-color 140ms ease, color 140ms ease;
+}
+
+.ep-nav-link:hover {
+  background: var(--color-surface-2);
+  color: var(--color-ink);
+  text-decoration: none;
+}
+
+.ep-nav-link[data-active="true"] {
+  background: color-mix(in srgb, var(--color-navy) 9%, transparent);
+  color: var(--color-navy);
+  font-weight: 600;
+}
+
+.ep-nav-count {
+  color: var(--color-ink-3);
+  font-size: 0.6875rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.ep-nav-link[data-active="true"] .ep-nav-count {
+  color: var(--color-navy);
+}
+
+/* ------------------------------------------------------------------ */
+/* Tables                                                              */
+/* ------------------------------------------------------------------ */
+
+.ep-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.8125rem;
+  margin-top: 0.85rem;
+}
+
+.ep-table th {
+  text-align: left;
+  color: var(--color-ink-3);
+  font-size: 0.6563rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  padding: 0 0.75rem 0.5rem 0;
+  border-bottom: 1px solid var(--color-line);
+}
+
+.ep-table td {
+  padding: 0.65rem 0.75rem 0.65rem 0;
+  border-bottom: 1px solid var(--color-line-soft);
+  color: var(--color-ink);
+  vertical-align: top;
+}
+
+.ep-table td[data-numeric="true"] {
+  font-variant-numeric: tabular-nums;
+}
+
+/* ------------------------------------------------------------------ */
+/* Forms                                                               */
+/* ------------------------------------------------------------------ */
+
+.ep-input,
+.ep-select {
+  width: 100%;
+  background: var(--color-surface);
+  color: var(--color-ink);
+  border: 1px solid var(--color-line);
+  border-radius: 4px;
+  padding: 0.45rem 0.6rem;
+  font-size: 0.8125rem;
+  font-family: inherit;
+  outline: none;
+  transition: border-color 140ms ease, box-shadow 140ms ease;
+}
+
+.ep-input:focus,
+.ep-select:focus {
+  border-color: var(--color-navy);
+  box-shadow: 0 0 0 1px var(--color-navy);
+}
+
+.ep-label {
+  display: block;
+  color: var(--color-ink-3);
+  font-size: 0.6563rem;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  margin-bottom: 0.35rem;
+}
+
+.ep-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.4rem;
+  padding: 0.42rem 0.85rem;
+  border-radius: 4px;
+  border: 1px solid var(--color-navy);
+  background: var(--color-navy);
+  color: #ffffff;
+  font-size: 0.7813rem;
+  font-weight: 600;
+  font-family: inherit;
+  cursor: pointer;
+  transition: background-color 140ms ease, border-color 140ms ease;
+}
+
+.ep-button:hover {
+  background: var(--color-navy-hover);
+  border-color: var(--color-navy-hover);
+}
+
+.ep-button[data-variant="secondary"] {
+  background: transparent;
+  color: var(--color-ink);
+  border-color: var(--color-line);
+  font-weight: 500;
+}
+
+.ep-button[data-variant="secondary"]:hover {
+  background: var(--color-surface-2);
+  border-color: var(--color-line);
+}
+
+.ep-button[data-variant="quiet"] {
+  background: transparent;
+  color: var(--color-ink-3);
+  border-color: transparent;
+  padding: 0.25rem 0.4rem;
+  font-weight: 500;
+}
+
+.ep-button[data-variant="quiet"]:hover {
+  color: var(--color-ink);
+  background: var(--color-surface-2);
+}
+
+/* ------------------------------------------------------------------ */
+/* Disclosure                                                          */
+/* ------------------------------------------------------------------ */
+
+.ep-disclosure {
+  border: 1px solid var(--color-line);
+  border-radius: 4px;
+  background: var(--color-surface);
+  overflow: hidden;
+}
+
+.ep-disclosure > summary {
+  cursor: pointer;
+  padding: 0.6rem 0.85rem;
+  color: var(--color-ink-2);
+  font-size: 0.8125rem;
+  font-weight: 500;
+  list-style: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  transition: background-color 140ms ease;
+}
+
+.ep-disclosure > summary::-webkit-details-marker {
+  display: none;
+}
+
+.ep-disclosure > summary:hover {
+  background: var(--color-surface-2);
+  color: var(--color-ink);
+}
+
+.ep-disclosure[open] > summary {
+  border-bottom: 1px solid var(--color-line-soft);
+}
+
+.ep-disclosure-body {
+  padding: 0.85rem;
+}
+
+/* ------------------------------------------------------------------ */
+/* Sidebar                                                             */
+/* ------------------------------------------------------------------ */
+
+.ep-sidebar {
+  width: 15rem;
+  flex: 0 0 15rem;
+  border-right: 1px solid var(--color-line);
+  background: var(--color-surface-2);
+  padding: 1.75rem 1.1rem;
+  min-height: 100vh;
+}
+
+.ep-brand {
+  color: var(--color-ink);
+  font-size: 1rem;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+}
+
+.ep-brand-subtitle {
+  color: var(--color-ink-3);
+  font-size: 0.6875rem;
+  margin-top: 0.2rem;
+  line-height: 1.4;
+}
+
+.ep-sidebar-label {
+  color: var(--color-ink-3);
+  font-size: 0.625rem;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  margin: 1.5rem 0 0.4rem;
+}
+
+/* ------------------------------------------------------------------ */
+/* Layout                                                              */
+/* ------------------------------------------------------------------ */
+
+.ep-shell {
+  display: flex;
+  min-height: 100vh;
+}
+
+.ep-main {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 2.4rem 2.5rem 5rem;
+}
+
+.ep-container {
+  max-width: 68rem;
+  margin: 0 auto;
+}
+
+.ep-two-col {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 2.5rem;
+}
+
+@media (max-width: 1024px) {
+  .ep-two-col {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 1.5rem;
+  }
+}
+
+@media (max-width: 768px) {
+  .ep-shell {
+    flex-direction: column;
+  }
+
+  .ep-sidebar {
+    width: 100%;
+    flex: none;
+    min-height: 0;
+    border-right: none;
+    border-bottom: 1px solid var(--color-line);
+  }
+
+  .ep-main {
+    padding: 1.5rem 1.1rem 3rem;
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/* Empty states                                                        */
+/* ------------------------------------------------------------------ */
+
+.ep-empty {
+  padding: 1.5rem 0;
+  color: var(--color-ink-3);
+  font-size: 0.875rem;
+}
+
+/* ------------------------------------------------------------------ */
+/* Motion                                                              */
+/* ------------------------------------------------------------------ */
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}

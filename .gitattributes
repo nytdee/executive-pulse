@@ -1,0 +1,38 @@
+# Normalise line endings in the repository itself, so every clone and
+# every CI run sees the same bytes. Without this, `core.autocrlf` —
+# a per-machine setting — decides what gets committed, and the
+# "golden fixtures are reproducible" check fails depending on where it
+# runs.
+
+* text=auto eol=lf
+
+# Source and config
+*.py      text eol=lf
+*.ts      text eol=lf
+*.tsx     text eol=lf
+*.js      text eol=lf
+*.mjs     text eol=lf
+*.json    text eol=lf
+*.yml     text eol=lf
+*.yaml    text eol=lf
+*.md      text eol=lf
+*.txt     text eol=lf
+*.csv     text eol=lf
+*.css     text eol=lf
+*.html    text eol=lf
+
+# Keep Windows batch files CRLF — cmd.exe needs it.
+*.bat     text eol=crlf
+*.cmd     text eol=crlf
+*.ps1     text eol=crlf
+
+# Binary
+*.png     binary
+*.jpg     binary
+*.jpeg    binary
+*.gif     binary
+*.ico     binary
+*.xlsx    binary
+*.zip     binary
+*.woff    binary
+*.woff2   binary

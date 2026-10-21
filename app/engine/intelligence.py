@@ -50,8 +50,19 @@ class SystemicRisk:
     recommendation: str
 
 
-def detect_cross_team_friction(df: pd.DataFrame) -> List[FrictionPoint]:
+ORG_PULSE_COLUMNS = [
+    "Department", "Total", "Open", "Done", "Completion_Rate", "Avg_Days_to_Complete",
+    "Overdue", "Overdue_Pct", "Blocked", "Blocked_Pct", "At_Risk", "High_Impact",
+    "Stale", "Stale_Pct", "Decisions", "Avg_Attention_Score", "Risk_Score",
+]
+
+
+def detect_cross_team_friction(df: pd.DataFrame, reference_date: datetime = None) -> List[FrictionPoint]:
     """Detect cross-team friction: where one team's work blocks another."""
+    if reference_date is None:
+        reference_date = utc_now()
+    reference_day = pd.Timestamp(reference_date).normalize()
+
     friction_points = []
 
     # Find all blockers with owners
@@ -84,7 +95,7 @@ def detect_cross_team_friction(df: pd.DataFrame) -> List[FrictionPoint]:
             due = row.get("Due_Date")
             days_blocked = 0
             if pd.notna(due):
-                days_blocked = max(0, (datetime.now() - due).days)
+                days_blocked = max(0, (reference_day - pd.Timestamp(due).normalize()).days)
 
             impact_val = row.get("Impact_Value", 0)
             if pd.notna(impact_val):
@@ -281,43 +292,42 @@ def detect_systemic_risks(df: pd.DataFrame) -> List[SystemicRisk]:
 
 
 def _find_dependency_chains(df: pd.DataFrame) -> List[List[str]]:
-    """Find dependency chains in the task graph."""
-    # Build adjacency list
+    """Find dependency chains in the task graph.
+
+    A chain is a sequence where each item depends on the next
+    (C-1 depends on C-2 depends on C-3). Chains of 3+ items are
+    reported as single points of failure.
+    """
+    # adjacency: dependency id -> items that depend on it
     graph = defaultdict(list)
     for _, row in df.iterrows():
         dep = row.get("Dependency", "")
         if isinstance(dep, str) and dep.strip():
-            graph[dep.strip()].append(row["Task_ID"])
+            for dep_id in [d.strip() for d in re.split(r"[;,|]", dep) if d.strip()]:
+                graph[dep_id].append(row["Task_ID"])
 
-    # Find chains (simple DFS)
-    chains = []
-    visited = set()
+    chains: List[List[str]] = []
+    seen = set()
 
-    def dfs(node: str, path: List[str]):
-        if node in visited or node not in graph:
-            if len(path) >= 2:
-                chains.append(path.copy())
+    def walk(node: str, path: List[str], visiting: frozenset) -> None:
+        if node in visiting:
             return
-        visited.add(node)
-        path.append(node)
-        for next_node in graph[node]:
-            dfs(next_node, path)
-        path.pop()
-        visited.remove(node)
+        current = path + [node]
+        next_nodes = graph.get(node, [])
+        if not next_nodes:
+            if len(current) >= 3:
+                key = tuple(current)
+                if key not in seen:
+                    seen.add(key)
+                    chains.append(current)
+            return
+        for nxt in next_nodes:
+            walk(nxt, current, visiting | {node})
 
-    for node in graph:
-        if node not in visited:
-            dfs(node, [])
+    for node in list(graph.keys()):
+        walk(node, [], frozenset())
 
-    # Filter and deduplicate
-    unique_chains = []
-    for chain in chains:
-        if len(chain) >= 3:
-            chain_ids = tuple(chain)
-            if chain_ids not in unique_chains:
-                unique_chains.append(chain_ids)
-
-    return [list(c) for c in unique_chains]
+    return chains
 
 
 def generate_meeting_brief(
@@ -326,11 +336,14 @@ def generate_meeting_brief(
     meeting_date: datetime = None,
     focus_departments: List[str] = None,
     focus_owners: List[str] = None,
+    reference_date: datetime = None,
 ) -> Dict[str, Any]:
     """Generate an intelligent, agenda-ready meeting brief."""
 
     if meeting_date is None:
         meeting_date = datetime.now()
+    if reference_date is None:
+        reference_date = meeting_date
 
     # Filter by focus if provided
     brief_df = df.copy()
@@ -364,7 +377,7 @@ def generate_meeting_brief(
     overdue = overdue.sort_values(["attention_score", "Due_Date"], ascending=[False, True])
 
     # Friction points
-    friction = detect_cross_team_friction(brief_df)
+    friction = detect_cross_team_friction(brief_df, reference_date)
 
     # Systemic risks
     systemic = detect_systemic_risks(brief_df)
@@ -447,8 +460,12 @@ def get_executive_attention_queue(
     return rank_attention(filtered).head(max_items)
 
 
-def get_decision_queue_detailed(df: pd.DataFrame) -> pd.DataFrame:
+def get_decision_queue_detailed(df: pd.DataFrame, reference_date: datetime = None) -> pd.DataFrame:
     """Get decision queue with enhanced context for executives."""
+    if reference_date is None:
+        reference_date = utc_now()
+    today = pd.Timestamp(reference_date).normalize()
+
     decisions = df[df.get("decision_required", False) == True].copy()
     if decisions.empty:
         return decisions
@@ -459,8 +476,10 @@ def get_decision_queue_detailed(df: pd.DataFrame) -> pd.DataFrame:
             return "URGENT - Overdue"
         due = row.get("Due_Date")
         if pd.notna(due):
-            days = (due - pd.Timestamp.now()).days
-            if days <= 0:
+            days = (pd.Timestamp(due).normalize() - today).days
+            if days < 0:
+                return "URGENT - Overdue"
+            if days == 0:
                 return "URGENT - Due today"
             elif days <= 2:
                 return f"Due in {days} day(s)"
@@ -472,14 +491,14 @@ def get_decision_queue_detailed(df: pd.DataFrame) -> pd.DataFrame:
 
     # Add impact context
     decisions["impact_context"] = decisions.apply(
-        lambda r: f"{r.get('Impact', '')} impact" + (f" (${r.get('Impact_Value', 0):,.0f})" if pd.notna(r.get('Impact_Value')) and r.get('Impact_Value', 0) > 0 else ""),
+        lambda r: f"{r.get('Impact', '')} impact" + (f" (₹{r.get('Impact_Value', 0):,.0f})" if pd.notna(r.get('Impact_Value')) and r.get('Impact_Value', 0) > 0 else ""),
         axis=1
     )
 
     return decisions.sort_values(["attention_score", "Due_Date"], ascending=[False, True]).reset_index(drop=True)
 
 
-def get_blocked_friction_detailed(df: pd.DataFrame) -> Dict[str, Any]:
+def get_blocked_friction_detailed(df: pd.DataFrame, reference_date: datetime = None) -> Dict[str, Any]:
     """Get detailed blocked/friction analysis with cross-team view."""
     blocked = df[df.get("blocked", False) == True].copy()
     if blocked.empty:
@@ -507,7 +526,7 @@ def get_blocked_friction_detailed(df: pd.DataFrame) -> Dict[str, Any]:
         }
 
     # Cross-team friction
-    friction = detect_cross_team_friction(df)
+    friction = detect_cross_team_friction(df, reference_date)
 
     return {
         "by_department": by_dept,
@@ -554,12 +573,19 @@ def get_org_pulse_enhanced(df: pd.DataFrame) -> pd.DataFrame:
         stale = open_work[open_work.get("stale", False) == True]
         decisions = open_work[open_work.get("decision_required", False) == True]
 
-        overdue_pct = round(len(overdue) / open_count * 100, 1) if open_count > 0 else 0
-        blocked_pct = round(len(blocked) / open_count * 100, 1) if open_count > 0 else 0
-        stale_pct = round(len(stale) / open_count * 100, 1) if open_count > 0 else 0
+        overdue_pct = round(len(overdue) / open_count * 100, 1) if open_count > 0 else 0.0
+        blocked_pct = round(len(blocked) / open_count * 100, 1) if open_count > 0 else 0.0
+        stale_pct = round(len(stale) / open_count * 100, 1) if open_count > 0 else 0.0
 
         # Completion rate
-        completion_rate = round(len(done_work) / total_work * 100, 1) if total_work > 0 else 0
+        completion_rate = round(len(done_work) / total_work * 100, 1) if total_work > 0 else 0.0
+
+        # Distinct items that are at risk (approaching deadline or high impact).
+        # Counted once per item — High_Impact and Overdue overlap.
+        at_risk_items = open_work[
+            (open_work.get("at_risk", False) == True) |
+            (open_work.get("high_impact", False) == True)
+        ]
 
         # Average days to complete (for done items)
         avg_days_to_complete = 0
@@ -572,14 +598,20 @@ def get_org_pulse_enhanced(df: pd.DataFrame) -> pd.DataFrame:
                     (done_with_dates["Completed_Date"] - done_with_dates["Start_Date"]).dt.days.mean(), 1
                 )
 
-        # Risk score for department (0-100)
-        risk_score = min(100, (
-            overdue_pct * 2 +
-            blocked_pct * 3 +
-            stale_pct * 1 +
-            len(high_impact) * 5 +
-            len(decisions) * 3
-        ))
+        # Department risk score (0-100).
+        # Rate-based so the score discriminates between departments:
+        # mixing percentages with raw counts saturated every department at
+        # 100 and made the ranking meaningless.
+        risk_score = round(
+            100 * (
+                overdue_pct / 100 * 0.30 +
+                blocked_pct / 100 * 0.25 +
+                stale_pct / 100 * 0.15 +
+                (len(high_impact) / open_count * 100 / 100) * 0.20 +
+                (len(decisions) / open_count * 100 / 100) * 0.10
+            ),
+            1,
+        )
 
         metrics.append({
             "Department": dept,
@@ -592,6 +624,7 @@ def get_org_pulse_enhanced(df: pd.DataFrame) -> pd.DataFrame:
             "Overdue_Pct": f"{overdue_pct}%",
             "Blocked": len(blocked),
             "Blocked_Pct": f"{blocked_pct}%",
+            "At_Risk": len(at_risk_items),
             "High_Impact": len(high_impact),
             "Stale": len(stale),
             "Stale_Pct": f"{stale_pct}%",
@@ -601,14 +634,13 @@ def get_org_pulse_enhanced(df: pd.DataFrame) -> pd.DataFrame:
         })
 
     result = pd.DataFrame(metrics)
-    if not result.empty:
-        result = result.sort_values("Risk_Score", ascending=False).reset_index(drop=True)
-
-    return result
-
+    if result.empty:
+        # Preserve the schema so callers can index columns safely.
+        return pd.DataFrame(columns=ORG_PULSE_COLUMNS)
+    return result.sort_values("Risk_Score", ascending=False).reset_index(drop=True)
 
 # Re-export rank_attention for convenience
-from app.engine.rule_engine import rank_attention
+from app.engine.rule_engine import rank_attention, utc_now
 
 
 # ---------------------------------------------------------------------------
@@ -682,11 +714,20 @@ def _norm_tokens(text: Any) -> List[str]:
 
 
 def _tok_match(keyword: str, token: str) -> bool:
-    """Prefix-tolerant match ('launch' hits 'launches'); longer keywords
-    also match inside words ('brand' hits 'rebranding')."""
+    """Prefix-tolerant match.
+
+    "launch" matches "launches" (the token extends the keyword) and
+    "brand" matches "rebranding" (the keyword sits inside a longer word).
+
+    A keyword must never match a *shorter* token that merely shares its
+    prefix: "marketing" must not match "market", or a task titled
+    "India market launch" would land in a Marketing exec's queue.
+    """
     if len(keyword) < 3 or len(token) < 3:
         return False
-    if token.startswith(keyword) or keyword.startswith(token):
+    if token == keyword:
+        return True
+    if token.startswith(keyword):
         return True
     return len(keyword) >= 5 and keyword in token
 

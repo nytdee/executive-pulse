@@ -123,6 +123,17 @@ VALUE_COLUMNS = {
     "Executive_Decision_Required": ["Yes", "No"],
 }
 
+# Labels that are already canonical for a column, so they never need a
+# mapping step. Deliberately wider than VALUE_COLUMNS: the schema
+# accepts true/false/1/0 for the decision flag, so a sheet using those
+# must not be interrupted with a pointless mapping prompt.
+ACCEPTED_VALUES = {
+    "Status": {str(v).strip().lower() for v in VALID_STATUSES},
+    "Priority": {str(v).strip().lower() for v in VALID_PRIORITIES},
+    "Impact": {str(v).strip().lower() for v in VALID_IMPACTS},
+    "Executive_Decision_Required": {str(v).strip().lower() for v in VALID_DECISION_VALUES},
+}
+
 
 def suggest_column_mapping(uploaded_columns: list) -> tuple:
     """Suggest schema←uploaded mapping. Returns (mapping, unmapped)."""
@@ -164,10 +175,10 @@ def find_unknown_values(df: pd.DataFrame) -> dict:
     for col, valid in VALUE_COLUMNS.items():
         if col not in df.columns:
             continue
-        canonical = _canonical_lookup(valid)
+        allowed = ACCEPTED_VALUES.get(col) or _canonical_lookup(valid).keys()
         series = df[col].astype(str).str.strip()
         series = series[~series.isin(["", "nan", "None", "NaT"])]
-        unknown = sorted({v for v in series.unique() if str(v).strip().lower() not in canonical})
+        unknown = sorted({v for v in series.unique() if str(v).strip().lower() not in allowed})
         if unknown:
             unknowns[col] = unknown
     return unknowns

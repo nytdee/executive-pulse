@@ -184,8 +184,16 @@ def validate_data(df: pd.DataFrame) -> List[str]:
         errors.append("Dataset is empty")
         return errors
 
+    # Validate against a string view so validation also works on frames
+    # that already hold parsed dates/numbers (re-validating a processed frame).
+    def as_text(column: str) -> pd.Series:
+        if column not in df.columns:
+            return pd.Series([], dtype="object")
+        return df[column].astype(str)
+
     # Check for blank Task_ID
-    blank_ids = df[df["Task_ID"].isna() | (df["Task_ID"].str.strip() == "")]
+    task_ids = as_text("Task_ID")
+    blank_ids = df[task_ids.isna() | (task_ids.str.strip() == "")]
     if not blank_ids.empty:
         errors.append(f"Found {len(blank_ids)} rows with blank Task_ID")
 
@@ -195,22 +203,23 @@ def validate_data(df: pd.DataFrame) -> List[str]:
         errors.append(f"Found duplicate Task_ID values: {dup_ids['Task_ID'].unique().tolist()}")
 
     # Validate Status values
-    invalid_status = df[~df["Status"].isin(VALID_STATUSES)]
+    invalid_status = df[~as_text("Status").isin(VALID_STATUSES)]
     if not invalid_status.empty:
         errors.append(f"Invalid Status values: {invalid_status['Status'].unique().tolist()}")
 
     # Validate Priority values
-    invalid_priority = df[~df["Priority"].isin(VALID_PRIORITIES)]
+    invalid_priority = df[~as_text("Priority").isin(VALID_PRIORITIES)]
     if not invalid_priority.empty:
         errors.append(f"Invalid Priority values: {invalid_priority['Priority'].unique().tolist()}")
 
     # Validate Impact values
-    invalid_impact = df[~df["Impact"].isin(VALID_IMPACTS)]
+    invalid_impact = df[~as_text("Impact").isin(VALID_IMPACTS)]
     if not invalid_impact.empty:
         errors.append(f"Invalid Impact values: {invalid_impact['Impact'].unique().tolist()}")
 
     # Validate Executive_Decision_Required
-    invalid_decision = df[~df["Executive_Decision_Required"].astype(str).isin([str(v) for v in VALID_DECISION_VALUES])]
+    decision_values = {str(v) for v in VALID_DECISION_VALUES}
+    invalid_decision = df[~as_text("Executive_Decision_Required").isin(decision_values)]
     if not invalid_decision.empty:
         errors.append(f"Invalid Executive_Decision_Required values: {invalid_decision['Executive_Decision_Required'].unique().tolist()}")
 
@@ -218,7 +227,7 @@ def validate_data(df: pd.DataFrame) -> List[str]:
     date_cols = ["Due_Date", "Start_Date", "Completed_Date", "Last_Updated", "Decision_By"]
     for col in date_cols:
         if col in df.columns:
-            invalid_dates = df[col].dropna()
+            invalid_dates = as_text(col)
             invalid_dates = invalid_dates[invalid_dates.str.strip() != ""]
             try:
                 pd.to_datetime(invalid_dates, errors="raise")
@@ -227,7 +236,7 @@ def validate_data(df: pd.DataFrame) -> List[str]:
 
     # Validate Impact_Value is numeric
     if "Impact_Value" in df.columns:
-        non_numeric = df["Impact_Value"].dropna()
+        non_numeric = as_text("Impact_Value")
         non_numeric = non_numeric[non_numeric.str.strip() != ""]
         try:
             pd.to_numeric(non_numeric, errors="raise")
@@ -241,8 +250,13 @@ def normalize_data(df: pd.DataFrame) -> pd.DataFrame:
     """Normalize and clean the dataframe."""
     df = df.copy()
 
-    # Strip whitespace from string columns
-    str_cols = df.select_dtypes(include=["object"]).columns
+    # Strip whitespace from string columns.
+    # Include both "object" and "str" so this works on pandas 2 (object)
+    # and pandas 3 (str-backed strings) without deprecation warnings.
+    str_cols = [
+        col for col in df.columns
+        if df[col].dtype == "object" or str(df[col].dtype) in ("string", "str")
+    ]
     for col in str_cols:
         df[col] = df[col].astype(str).str.strip()
         df[col] = df[col].replace({"nan": "", "None": "", "NaT": ""})

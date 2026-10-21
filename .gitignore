@@ -6,5 +6,9 @@ venv/
 .env
 .streamlit/secrets.toml
 app/data/.snapshot.json
+app/data/.snapshots/
+.pytest_cache/
 .DS_Store
 Thumbs.db
+
+.vercel

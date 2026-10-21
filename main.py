@@ -6,9 +6,12 @@ Presentation layer only. Data loading, rule engine, attention scoring,
 ranking and filtering live in app/data, app/engine and app/components.
 """
 
+import hashlib
 import json
 import os
+import re
 import time
+from datetime import datetime
 
 import pandas as pd
 import streamlit as st
@@ -49,7 +52,9 @@ from app.engine.rule_engine import (
     compute_all_flags,
     rank_attention,
     get_attention_queue,
+    get_at_risk,
     get_decision_queue,
+    count_attention,
     compute_changes,
 )
 
@@ -159,7 +164,7 @@ def _resolve_external_frame(source_type: str, source_key: str, uploaded_file=Non
     return None, (raw, source_key)
 
 
-SNAPSHOT_PATH = os.path.join(os.path.dirname(__file__), "app", "data", ".snapshot.json")
+SNAPSHOT_DIR = os.path.join(os.path.dirname(__file__), "app", "data", ".snapshots")
 SNAPSHOT_COLUMNS = [
     "Task_ID", "Task", "Project", "Department", "Owner", "Status",
     "Due_Date", "Last_Updated", "Executive_Decision_Required", "Blocker",
@@ -167,15 +172,47 @@ SNAPSHOT_COLUMNS = [
 ]
 
 
-def _load_snapshot() -> pd.DataFrame | None:
-    """Load the previous dataset snapshot for change detection."""
+def _snapshot_path(source_key: str) -> str:
+    """Snapshot file for one data source."""
+    safe = re.sub(r"[^A-Za-z0-9_.-]", "_", source_key or "sample")[:80]
+    return os.path.join(SNAPSHOT_DIR, f"{safe}.json")
+
+
+def _data_fingerprint(df: pd.DataFrame) -> str:
+    """Stable hash of the state that change detection cares about.
+
+    Two datasets with the same fingerprint are the same from an
+    executive's point of view, so no change happened between them.
+    """
+    columns = [c for c in ("Task_ID", "Status", "Due_Date", "Last_Updated",
+                           "Executive_Decision_Required", "Blocker") if c in df.columns]
+    if not columns:
+        return ""
+    parts = []
+    for _, row in df[columns].sort_values("Task_ID").iterrows():
+        parts.append("|".join(str(row[c]) for c in columns))
+    return hashlib.sha256("\n".join(parts).encode("utf-8")).hexdigest()
+
+
+def _load_snapshot(source_key: str) -> tuple:
+    """Load the previous dataset snapshot.
+
+    Returns (snapshot_frame_or_None, fingerprint, stored_changes).
+    The fingerprint tells us whether the data changed since the baseline
+    was written; the stored changes keep the feed visible until a new
+    change actually occurs.
+    """
+    path = _snapshot_path(source_key)
     try:
-        if not os.path.exists(SNAPSHOT_PATH):
-            return None
-        with open(SNAPSHOT_PATH, "r", encoding="utf-8") as handle:
-            records = json.load(handle)
+        if not os.path.exists(path):
+            return None, "", None
+        with open(path, "r", encoding="utf-8") as handle:
+            payload = json.load(handle)
+        if not payload:
+            return None, "", None
+        records = payload.get("records") or []
         if not records:
-            return None
+            return None, payload.get("fingerprint", ""), payload.get("changes")
         previous = pd.DataFrame(records)
         for column in ("Due_Date", "Last_Updated"):
             if column in previous.columns:
@@ -183,13 +220,29 @@ def _load_snapshot() -> pd.DataFrame | None:
         for column in ("overdue", "blocked", "decision_required"):
             if column in previous.columns:
                 previous[column] = previous[column].astype(bool)
-        return previous
-    except (OSError, ValueError):
-        return None
+        return previous, payload.get("fingerprint", ""), payload.get("changes")
+    except (OSError, ValueError, TypeError):
+        return None, "", None
 
 
-def _save_snapshot(df: pd.DataFrame) -> None:
-    """Persist the current dataset for the next review."""
+def _changes_are_meaningful(changes: dict) -> bool:
+    """True when at least one tracked change category has rows."""
+    if not changes:
+        return False
+    for key in ("new_overdue", "newly_blocked", "resolved", "status_changes", "new_decisions"):
+        frame = changes.get(key)
+        if frame is not None and len(frame) > 0:
+            return True
+    return False
+
+
+def _save_snapshot(df: pd.DataFrame, source_key: str, fingerprint: str, changes: dict = None) -> None:
+    """Persist the current dataset as the new baseline.
+
+    Only called when the data actually changed — otherwise the baseline
+    would advance on every Streamlit rerun and erase the change feed.
+    `changes` is the raw change dict; it is serialised here.
+    """
     try:
         available = [c for c in SNAPSHOT_COLUMNS if c in df.columns]
         snapshot = df[available].copy()
@@ -199,10 +252,53 @@ def _save_snapshot(df: pd.DataFrame) -> None:
         for column in ("Executive_Decision_Required",):
             if column in snapshot.columns:
                 snapshot[column] = snapshot[column].astype(str)
-        with open(SNAPSHOT_PATH, "w", encoding="utf-8") as handle:
-            json.dump(snapshot.to_dict("records"), handle)
+        os.makedirs(SNAPSHOT_DIR, exist_ok=True)
+        payload = {
+            "saved_at": datetime.now().isoformat(timespec="seconds"),
+            "fingerprint": fingerprint,
+            "records": snapshot.to_dict("records"),
+        }
+        if changes is not None:
+            payload["changes"] = _serialise_changes(changes)
+        with open(_snapshot_path(source_key), "w", encoding="utf-8") as handle:
+            json.dump(payload, handle)
     except (OSError, ValueError, TypeError):
         pass
+
+
+def _serialise_changes(changes: dict) -> dict:
+    """Convert change frames into JSON-safe records."""
+    out = {}
+    for key, frame in (changes or {}).items():
+        if frame is None or len(frame) == 0:
+            continue
+        records = frame.to_dict("records")
+        cleaned = []
+        for record in records:
+            item = {}
+            for field, value in record.items():
+                if isinstance(value, (pd.Timestamp, datetime)):
+                    item[field] = value.isoformat()
+                elif value is None or (isinstance(value, float) and pd.isna(value)):
+                    item[field] = ""
+                elif isinstance(value, (int, float, str, bool)):
+                    item[field] = value
+                else:
+                    item[field] = str(value)
+            cleaned.append(item)
+        out[key] = cleaned
+    return out
+
+
+def _deserialise_changes(stored) -> dict:
+    """Rebuild change frames from their stored JSON form."""
+    keys = ("new_overdue", "newly_blocked", "resolved", "status_changes", "new_decisions")
+    out = {key: pd.DataFrame() for key in keys}
+    for key in keys:
+        records = (stored or {}).get(key) or []
+        if records:
+            out[key] = pd.DataFrame(records)
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -220,14 +316,9 @@ def _safe_len(value) -> int:
 def _metric_counts(df: pd.DataFrame) -> dict:
     """Build display counts using the existing engine functions."""
     total_open = len(df[df["Status"] != "Done"])
-    attention = get_attention_queue(df)
     decisions = get_decision_queue(df)
     blocked = df[df.get("blocked", False) == True]
-    at_risk = df[
-        (df.get("at_risk", False) == True)
-        | (df.get("high_impact", False) == True)
-    ]
-    at_risk = at_risk[at_risk["Status"] != "Done"]
+    at_risk = get_at_risk(df)
 
     critical = 0
     if "score_band" in df.columns:
@@ -235,7 +326,7 @@ def _metric_counts(df: pd.DataFrame) -> dict:
 
     return {
         "open": total_open,
-        "attention": _safe_len(attention),
+        "attention": count_attention(df),
         "decisions": _safe_len(decisions),
         "blocked": _safe_len(blocked),
         "at_risk": _safe_len(at_risk),
@@ -247,7 +338,6 @@ def render_executive_header(df: pd.DataFrame, freshness: str) -> None:
     """Calm executive state: what needs attention, in one glance."""
     counts = _metric_counts(df)
     # Portable day format (Windows strftime has no %-d).
-    from datetime import datetime
     today = datetime.now().strftime("%A, %B %d").replace(" 0", " ")
 
     st.markdown('<div class="ep-eyebrow">Executive operating layer</div>', unsafe_allow_html=True)
@@ -547,9 +637,18 @@ def main():
         st.stop()
 
     # Change detection against the previous snapshot (engine unchanged).
-    previous_snapshot = _load_snapshot()
+    # The feed is sticky: it keeps showing the last real change until a new
+    # one occurs, so navigating or filtering never blanks it out.
+    fingerprint = _data_fingerprint(df)
+    previous_snapshot, previous_fingerprint, stored_changes = _load_snapshot(source_key)
     changes = compute_changes(df, previous_snapshot)
-    _save_snapshot(df)
+
+    if fingerprint != previous_fingerprint:
+        # The data moved. Publish the new delta and advance the baseline.
+        _save_snapshot(df, source_key, fingerprint, changes)
+    elif stored_changes:
+        # Nothing new since the last real change — keep the feed visible.
+        changes = _deserialise_changes(stored_changes)
 
     filtered_df = apply_filters(df, filters)
     persona = st.session_state.get("ep_persona", "CEO")

@@ -20,6 +20,7 @@ from app.data.mapping import (
     process_mapped_frame,
     scope_key,
 )
+from app.engine.rule_engine import get_at_risk
 from app.engine.intelligence import (
     detect_cross_team_friction,
     analyze_owner_load,
@@ -39,19 +40,21 @@ from app.engine.intelligence import (
 # ---------------------------------------------------------------------------
 
 def _fmt_money(value: Any) -> str:
+    """Format an amount in Indian currency notation (lakh / crore)."""
     try:
         amount = float(value)
     except (TypeError, ValueError):
         return ""
     if pd.isna(amount) or amount <= 0:
         return ""
-    if amount >= 1_000_000:
-        text = f"{amount / 1_000_000:.1f}".rstrip("0").rstrip(".")
-        return f"${text}M"
+    if amount >= 10_000_000:          # 1 crore
+        return f"₹{amount / 10_000_000:.2f}Cr".replace(".00Cr", "Cr")
+    if amount >= 100_000:            # 1 lakh
+        text = f"{amount / 100_000:.1f}".rstrip("0").rstrip(".")
+        return f"₹{text}L"
     if amount >= 1_000:
-        text = f"{amount / 1_000:.0f}"
-        return f"${text}K"
-    return f"${amount:,.0f}"
+        return f"₹{amount / 1_000:.0f}K"
+    return f"₹{amount:,.0f}"
 
 
 def _fmt_date(value: Any) -> str:
@@ -403,8 +406,8 @@ def render_org_signal_compact(df: pd.DataFrame, max_rows: int = 5) -> None:
         if int(r.get("Decisions", 0)) > 0:
             bits.append(f"{int(r['Decisions'])} decision")
         open_count = int(r.get("Open", 0))
-        at_risk = int(r.get("High_Impact", 0)) + int(r.get("Overdue", 0))
-        if at_risk > 0 and f"{at_risk} at risk" not in bits:
+        at_risk = int(r.get("At_Risk", 0))
+        if at_risk > 0:
             bits.append(f"{at_risk} at risk")
         st.markdown(
             f"<div class='sig'><div class='sig-main'>"
@@ -452,12 +455,10 @@ def render_decision_queue(df: pd.DataFrame) -> None:
 
 def render_at_risk(df: pd.DataFrame) -> None:
     """Exception view grouped by department."""
-    risk_items = df[(df.get("at_risk", False) == True) | (df.get("high_impact", False) == True)]
-    risk_items = risk_items[risk_items["Status"] != "Done"]
+    risk_items = get_at_risk(df)
     if risk_items.empty:
         st.info("No material execution risks right now.")
         return
-    risk_items = risk_items.sort_values(["attention_score", "Due_Date"], ascending=[False, True])
     st.markdown(
         f"<div class='grp-summary'>{len(risk_items)} issues could materially affect execution.</div>",
         unsafe_allow_html=True,
